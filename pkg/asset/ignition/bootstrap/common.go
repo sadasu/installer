@@ -40,8 +40,6 @@ import (
 	"github.com/openshift/installer/pkg/asset/tls"
 	"github.com/openshift/installer/pkg/types"
 	baremetaltypes "github.com/openshift/installer/pkg/types/baremetal"
-	"github.com/openshift/installer/pkg/types/dns"
-	gcptypes "github.com/openshift/installer/pkg/types/gcp"
 	nutanixtypes "github.com/openshift/installer/pkg/types/nutanix"
 	vspheretypes "github.com/openshift/installer/pkg/types/vsphere"
 )
@@ -194,40 +192,24 @@ func (a *Common) generateConfig(dependencies asset.Parents, templateData *bootst
 		}
 	}
 
-	// Copy platform specific files/units when present with the exception of GCP
-	// On GCP, copy over platform specific files/units only when UserProvisionedDNS is enabled.
+	// Check for optional platform specific files/units
 	platform := installConfig.Config.Platform.Name()
-	var copyPlatformFiles bool
-	switch platform {
-	case gcptypes.Name:
-		if installConfig.Config.GCP != nil && installConfig.Config.GCP.UserProvisionedDNS == dns.UserProvisionedDNSEnabled {
-			copyPlatformFiles = true
-		} else {
-			copyPlatformFiles = false
+	platformFilePath := fmt.Sprintf("bootstrap/%s/files", platform)
+	directory, err := data.Assets.Open(platformFilePath)
+	if err == nil {
+		directory.Close()
+		err = AddStorageFiles(a.Config, "/", platformFilePath, templateData)
+		if err != nil {
+			return err
 		}
-	default:
-		copyPlatformFiles = true
 	}
 
-	// Check for optional platform specific files/units
-	if copyPlatformFiles {
-		platformFilePath := fmt.Sprintf("bootstrap/%s/files", platform)
-		directory, err := data.Assets.Open(platformFilePath)
-		if err == nil {
-			directory.Close()
-			err = AddStorageFiles(a.Config, "/", platformFilePath, templateData)
-			if err != nil {
-				return err
-			}
-		}
-
-		platformUnitPath := fmt.Sprintf("bootstrap/%s/systemd/units", platform)
-		directory, err = data.Assets.Open(platformUnitPath)
-		if err == nil {
-			directory.Close()
-			if err = AddSystemdUnits(a.Config, platformUnitPath, templateData, commonEnabledServices); err != nil {
-				return err
-			}
+	platformUnitPath := fmt.Sprintf("bootstrap/%s/systemd/units", platform)
+	directory, err = data.Assets.Open(platformUnitPath)
+	if err == nil {
+		directory.Close()
+		if err = AddSystemdUnits(a.Config, platformUnitPath, templateData, commonEnabledServices); err != nil {
+			return err
 		}
 	}
 
