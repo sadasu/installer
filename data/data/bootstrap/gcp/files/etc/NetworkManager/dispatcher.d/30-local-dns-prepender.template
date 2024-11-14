@@ -1,3 +1,4 @@
+{{if .PlatformData.GCP.UserProvisionedDNS}}
 #!/bin/bash
 IFACE=$1
 STATUS=$2
@@ -49,3 +50,4 @@ EOF
     *)
     ;;
 esac
+{{end}}
