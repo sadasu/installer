@@ -143,7 +143,7 @@ func TestGenerateIngerssDefaultPlacement(t *testing.T) {
 			name:                      "aws multi-node with 1 day-1 worker",
 			installConfigBuildOptions: []icOption{icBuild.forAWS()},
 			controlPlaneTopology:      configv1.HighlyAvailableTopologyMode,
-			infrastructureTopology:    configv1.SingleReplicaTopologyMode,
+			infrastructureTopology:    configv1.HighlyAvailableTopologyMode,
 			expectedIngressAWSLBType:  configv1.Classic,
 			expectedIngressPlacement:  configv1.DefaultPlacementWorkers,
 		},
@@ -194,7 +194,7 @@ func TestGenerateIngerssDefaultPlacement(t *testing.T) {
 			name:                      "none-platform multi-node with 1 day-1 worker",
 			installConfigBuildOptions: []icOption{icBuild.forNone()},
 			controlPlaneTopology:      configv1.HighlyAvailableTopologyMode,
-			infrastructureTopology:    configv1.SingleReplicaTopologyMode,
+			infrastructureTopology:    configv1.HighlyAvailableTopologyMode,
 			expectedIngressPlacement:  configv1.DefaultPlacementWorkers,
 		},
 		{

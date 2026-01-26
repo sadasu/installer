@@ -63,7 +63,7 @@ func (s *Scheduler) Generate(_ context.Context, dependencies asset.Parents) erro
 			computeReplicas += *pool.Replicas
 		}
 	}
-	if computeReplicas == 0 {
+	if computeReplicas < 2 {
 		// A schedulable host is required for a successful install to complete.
 		// If the install config has 0 replicas for compute hosts, it's one of two cases:
 		//   1. An IPI deployment with no compute hosts.  The deployment can not succeed

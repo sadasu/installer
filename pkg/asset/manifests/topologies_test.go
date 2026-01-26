@@ -125,6 +125,21 @@ func Test_DetermineTopologies(t *testing.T) {
 			expectedControlPlane: configv1.HighlyAvailableTopologyMode,
 			expectedInfra:        configv1.HighlyAvailableTopologyMode,
 		},
+		{
+			desc: "should set infra to HA controlPlane and compute from controlPlane value",
+			installConfig: &types.InstallConfig{
+				ControlPlane: &types.MachinePool{
+					Replicas: ptr.To[int64](3),
+				},
+				Compute: []types.MachinePool{
+					{
+						Replicas: ptr.To[int64](1),
+					},
+				},
+			},
+			expectedControlPlane: configv1.HighlyAvailableTopologyMode,
+			expectedInfra:        configv1.HighlyAvailableTopologyMode,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {

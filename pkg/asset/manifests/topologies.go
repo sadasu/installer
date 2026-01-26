@@ -41,6 +41,12 @@ func determineTopologies(installConfig *types.InstallConfig) (controlPlaneTopolo
 		}
 	case 1:
 		infrastructureTopology = configv1.SingleReplicaTopologyMode
+		// When there are less than 2 worker nodes, the masters are made scheduable,
+		// effectively making the number of worker nodes greater than 1.
+		// Setting infrastructureTopology accordingly.
+		if controlPlaneTopology == configv1.HighlyAvailableTopologyMode {
+			infrastructureTopology = configv1.HighlyAvailableTopologyMode
+		}
 	default:
 		infrastructureTopology = configv1.HighlyAvailableTopologyMode
 	}
