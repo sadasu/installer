@@ -38,10 +38,10 @@ func GenerateClusterAssets(installConfig *installconfig.InstallConfig, clusterID
 	networkSecurityGroup := installConfig.Config.Platform.Azure.NetworkSecurityGroupName(clusterID.InfraID)
 	securityGroup := capz.SecurityGroup{Name: networkSecurityGroup}
 
-	CIDRs := capiutils.CIDRsFromInstallConfig(installConfig)
-	addressFamilySubnets, err := getAddressFamilySubnets(CIDRs)
+	cidrs := capiutils.CIDRsFromInstallConfig(installConfig)
+	addressFamilySubnets, err := getAddressFamilySubnets(cidrs)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to split CIDRs into subnets")
+		return nil, errors.Wrap(err, "failed to split cidrs into subnets")
 	}
 
 	defaultSecurityRules := []capz.SecurityRule{
@@ -156,8 +156,11 @@ func GenerateClusterAssets(installConfig *installconfig.InstallConfig, clusterID
 		splitLength = len(zones) + 1
 	}
 
-	addressFamilySubnets.SplitComputeSubnet(splitLength)
-	virtualNetworkAddressPrefixes := getVirtualNetworkAddressPrefixes(CIDRs)
+	err = addressFamilySubnets.SplitComputeSubnet(splitLength)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to split compute subnet")
+	}
+	virtualNetworkAddressPrefixes := getVirtualNetworkAddressPrefixes(cidrs)
 
 	// CAPZ expects the capz-system to be created.
 	azureNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "capz-system"}}
@@ -204,7 +207,7 @@ func GenerateClusterAssets(installConfig *installconfig.InstallConfig, clusterID
 	}
 
 	// IPv6 outbound load balancer for worker subnet(s)
-	var nodeOutboundLB *capz.LoadBalancerSpec = nil
+	var nodeOutboundLB *capz.LoadBalancerSpec
 	if addressFamilySubnets.IsDualStack() {
 		lbip6, err := getLBIP(addressFamilySubnets.GetIPv6Subnets(), installConfig)
 		if err != nil {
@@ -410,23 +413,6 @@ func GenerateClusterAssets(installConfig *installconfig.InstallConfig, clusterID
 			},
 		},
 	}, nil
-}
-
-func getCIDRBlocks(subnets []*net.IPNet) ([]string, []string, []string) {
-	var controlPlaneCIDRBlocks, computeCIDRBlocks, otherCIDRBlocks []string
-
-	for i, subnet := range subnets {
-		switch i {
-		case 0:
-			controlPlaneCIDRBlocks = append(controlPlaneCIDRBlocks, subnet.String())
-		case 1:
-			computeCIDRBlocks = append(computeCIDRBlocks, subnet.String())
-		default:
-			otherCIDRBlocks = append(otherCIDRBlocks, subnet.String())
-		}
-	}
-
-	return controlPlaneCIDRBlocks, computeCIDRBlocks, otherCIDRBlocks
 }
 
 func getSubnetSpec(installConfig *installconfig.InstallConfig, controlPlaneSubnet, computeSubnet string, securityGroup capz.SecurityGroup, addressFamilySubnets *AddressFamilySubnets, nodeSubnetID string, infraID string, zones []string) ([]capz.SubnetSpec, error) {
@@ -708,12 +694,14 @@ func stringifyAddressPrefixes(addressPrefixes []*net.IPNet) []string {
 	return strAddressPrefixes
 }
 
+// AddressFamilySubnet holds an IPv4 and IPv6 subnet pair.
 type AddressFamilySubnet struct {
 	IPv4Subnet *net.IPNet
 	IPv6Subnet *net.IPNet
 	SubnetRole *capz.SubnetRole
 }
 
+// AddressFamilySubnets keeps track of IPv4 and IPv6 subnets.
 type AddressFamilySubnets struct {
 	addressFamilySubnets []AddressFamilySubnet
 	length               int
@@ -723,22 +711,27 @@ type AddressFamilySubnets struct {
 	isDualStack bool
 }
 
+// Length returns the number of subnets in the list.
 func (a AddressFamilySubnets) Length() int {
 	return a.length
 }
 
+// IPv4Count returns the number of IPv4 subnets in the list.
 func (a AddressFamilySubnets) IPv4Count() int {
 	return a.ipv4Count
 }
 
+// IPv6Count returns the number of IPv6 subnets in the list.
 func (a AddressFamilySubnets) IPv6Count() int {
 	return a.ipv6Count
 }
 
+// IsDualStack determines if we are using single or dual stack networking.
 func (a AddressFamilySubnets) IsDualStack() bool {
 	return a.isDualStack
 }
 
+// GetIPv4Subnets returns all IPv4 subnets in the list.
 func (a AddressFamilySubnets) GetIPv4Subnets() []*net.IPNet {
 	var ipv4Subnets []*net.IPNet
 	for _, ipv4Subnet := range a.addressFamilySubnets {
@@ -749,6 +742,7 @@ func (a AddressFamilySubnets) GetIPv4Subnets() []*net.IPNet {
 	return ipv4Subnets
 }
 
+// GetIPv6Subnets returns all IPv6 subnets in the list.
 func (a AddressFamilySubnets) GetIPv6Subnets() []*net.IPNet {
 	var ipv6Subnets []*net.IPNet
 	for _, ipv6Subnet := range a.addressFamilySubnets {
@@ -759,6 +753,7 @@ func (a AddressFamilySubnets) GetIPv6Subnets() []*net.IPNet {
 	return ipv6Subnets
 }
 
+// GetControlPlaneSubnet returns the control plane subnet.
 func (a AddressFamilySubnets) GetControlPlaneSubnet() AddressFamilySubnet {
 	if a.length > 0 {
 		return a.addressFamilySubnets[0]
@@ -766,6 +761,7 @@ func (a AddressFamilySubnets) GetControlPlaneSubnet() AddressFamilySubnet {
 	return AddressFamilySubnet{}
 }
 
+// SplitIPv4ComputeSubnets splits the IPv4 compute subnet into the number of subnets specified.
 func (a AddressFamilySubnets) SplitIPv4ComputeSubnets(numSubnets int) ([]*net.IPNet, error) {
 	if a.ipv4Count > 1 && numSubnets > 0 {
 		return cidr.SplitIntoSubnetsIPv4(a.GetIPv4Subnets()[1].String(), numSubnets)
@@ -773,6 +769,7 @@ func (a AddressFamilySubnets) SplitIPv4ComputeSubnets(numSubnets int) ([]*net.IP
 	return []*net.IPNet{}, nil
 }
 
+// SplitIPv6ComputeSubnets splits the IPv6 compute subnet into the number of subnets specified.
 func (a AddressFamilySubnets) SplitIPv6ComputeSubnets(numSubnets int) ([]*net.IPNet, error) {
 	if a.ipv6Count > 1 && numSubnets > 0 {
 		return cidr.SplitIntoSubnetsIPv6(a.GetIPv6Subnets()[1].String(), numSubnets)
@@ -780,6 +777,7 @@ func (a AddressFamilySubnets) SplitIPv6ComputeSubnets(numSubnets int) ([]*net.IP
 	return []*net.IPNet{}, nil
 }
 
+// SplitComputeSubnet splits the compute subnet into the number of subnets specified.
 func (a *AddressFamilySubnets) SplitComputeSubnet(numSubnets int) error {
 	if numSubnets <= 0 {
 		return nil
@@ -804,7 +802,7 @@ func (a *AddressFamilySubnets) SplitComputeSubnet(numSubnets int) error {
 		ipv6Count = len(ipv6ComputeSubnets)
 	}
 
-	var addressFamilySubnets []AddressFamilySubnet
+	addressFamilySubnets := make([]AddressFamilySubnet, 0)
 	for i, ipv4ComputeSubnet := range ipv4ComputeSubnets {
 		addressFamilySubnet := AddressFamilySubnet{
 			IPv4Subnet: ipv4ComputeSubnet,
@@ -829,6 +827,7 @@ func (a *AddressFamilySubnets) SplitComputeSubnet(numSubnets int) error {
 	return nil
 }
 
+// GetComputeSubnets returns the compute subnets.
 func (a AddressFamilySubnets) GetComputeSubnets() []AddressFamilySubnet {
 	var computeSubnets []AddressFamilySubnet
 
@@ -841,6 +840,7 @@ func (a AddressFamilySubnets) GetComputeSubnets() []AddressFamilySubnet {
 	return computeSubnets
 }
 
+// GetIPv4ComputeSubnets returns the IPv4 compute subnets.
 func (a AddressFamilySubnets) GetIPv4ComputeSubnets() []*net.IPNet {
 	computeSubnets := a.GetComputeSubnets()
 
@@ -854,6 +854,7 @@ func (a AddressFamilySubnets) GetIPv4ComputeSubnets() []*net.IPNet {
 	return ipv4ComputeSubnets
 }
 
+// GetIPv6ComputeSubnets returns the IPv6 compute subnets.
 func (a AddressFamilySubnets) GetIPv6ComputeSubnets() []*net.IPNet {
 	computeSubnets := a.GetComputeSubnets()
 
@@ -867,6 +868,7 @@ func (a AddressFamilySubnets) GetIPv6ComputeSubnets() []*net.IPNet {
 	return ipv6ComputeSubnets
 }
 
+// GetAdditionalSubnets returns any additional subnets.
 func (a AddressFamilySubnets) GetAdditionalSubnets() []AddressFamilySubnet {
 	var additionalSubnets []AddressFamilySubnet
 
@@ -879,6 +881,7 @@ func (a AddressFamilySubnets) GetAdditionalSubnets() []AddressFamilySubnet {
 	return additionalSubnets
 }
 
+// GetIPv4AdditionalSubnets returns any additional IPv4 subnets.
 func (a AddressFamilySubnets) GetIPv4AdditionalSubnets() []*net.IPNet {
 	nonComputeSubnets := a.GetAdditionalSubnets()
 
@@ -892,6 +895,7 @@ func (a AddressFamilySubnets) GetIPv4AdditionalSubnets() []*net.IPNet {
 	return ipv4Subnets
 }
 
+// GetIPv6AdditionalSubnets returns any additional IPv6 subnets.
 func (a AddressFamilySubnets) GetIPv6AdditionalSubnets() []*net.IPNet {
 	nonComputeSubnets := a.GetAdditionalSubnets()
 
@@ -905,6 +909,7 @@ func (a AddressFamilySubnets) GetIPv6AdditionalSubnets() []*net.IPNet {
 	return ipv6Subnets
 }
 
+// GetIPv4CIDRBlocks returns all IPv4 CIDR blocks.
 func (a AddressFamilySubnets) GetIPv4CIDRBlocks() []string {
 	var ipv4CIDRBlocks []string
 
@@ -917,6 +922,7 @@ func (a AddressFamilySubnets) GetIPv4CIDRBlocks() []string {
 	return ipv4CIDRBlocks
 }
 
+// GetIPv6CIDRBlocks returns all IPv6 CIDR blocks.
 func (a AddressFamilySubnets) GetIPv6CIDRBlocks() []string {
 	var ipv6CIDRBlocks []string
 
@@ -929,6 +935,7 @@ func (a AddressFamilySubnets) GetIPv6CIDRBlocks() []string {
 	return ipv6CIDRBlocks
 }
 
+// GetIPv4ControlPlaneCIDRBlocks returns all IPv4 control plane CIDR blocks.
 func (a AddressFamilySubnets) GetIPv4ControlPlaneCIDRBlocks() string {
 	ipv4Subnet := a.GetControlPlaneSubnet()
 	if ipv4Subnet.IPv4Subnet != nil {
@@ -937,6 +944,7 @@ func (a AddressFamilySubnets) GetIPv4ControlPlaneCIDRBlocks() string {
 	return ""
 }
 
+// GetIPv6ControlPlaneCIDRBlocks returns all IPv6 control plane CIDR blocks.
 func (a AddressFamilySubnets) GetIPv6ControlPlaneCIDRBlocks() string {
 	ipv6Subnet := a.GetControlPlaneSubnet()
 	if ipv6Subnet.IPv6Subnet != nil {
@@ -945,6 +953,7 @@ func (a AddressFamilySubnets) GetIPv6ControlPlaneCIDRBlocks() string {
 	return ""
 }
 
+// GetIPv4ComputeCIDRBlocks returns all IPv4 compute CIDR blocks.
 func (a AddressFamilySubnets) GetIPv4ComputeCIDRBlocks() []string {
 	var ipv4CIDRBlocks []string
 
@@ -957,6 +966,7 @@ func (a AddressFamilySubnets) GetIPv4ComputeCIDRBlocks() []string {
 	return ipv4CIDRBlocks
 }
 
+// GetIPv6ComputeCIDRBlocks returns all IPv6 compute CIDR blocks.
 func (a AddressFamilySubnets) GetIPv6ComputeCIDRBlocks() []string {
 	var ipv6CIDRBlocks []string
 
@@ -969,6 +979,7 @@ func (a AddressFamilySubnets) GetIPv6ComputeCIDRBlocks() []string {
 	return ipv6CIDRBlocks
 }
 
+// GetIPv4AdditionalCIDRBlocks returns all additional IPv4 CIDR blocks.
 func (a AddressFamilySubnets) GetIPv4AdditionalCIDRBlocks() []string {
 	nonComputeSubnets := a.GetAdditionalSubnets()
 
@@ -982,6 +993,7 @@ func (a AddressFamilySubnets) GetIPv4AdditionalCIDRBlocks() []string {
 	return ipv4CIDRBlocks
 }
 
+// GetIPv6AdditionalCIDRBlocks returns all additional IPv6 CIDR blocks.
 func (a AddressFamilySubnets) GetIPv6AdditionalCIDRBlocks() []string {
 	nonComputeSubnets := a.GetAdditionalSubnets()
 
@@ -995,31 +1007,31 @@ func (a AddressFamilySubnets) GetIPv6AdditionalCIDRBlocks() []string {
 	return ipv6CIDRBlocks
 }
 
-func getAddressFamilySubnets(CIDRs []ipnet.IPNet) (AddressFamilySubnets, error) {
+func getAddressFamilySubnets(cidrs []ipnet.IPNet) (AddressFamilySubnets, error) {
 	var addressFamilySubnets AddressFamilySubnets
 	var err error
 
-	// Split CIDRs into IPv4 and IPv6 CIDRs
-	var ipv4CIDRs, ipv6CIDRs []ipnet.IPNet
-	for _, CIDR := range CIDRs {
-		switch len(CIDR.IP) {
+	// Split cidrs into IPv4 and IPv6 cidrs
+	var ipv4Cidrs, ipv6Cidrs []ipnet.IPNet
+	for _, cidr := range cidrs {
+		switch len(cidr.IP) {
 		case net.IPv4len:
-			ipv4CIDRs = append(ipv4CIDRs, CIDR)
+			ipv4Cidrs = append(ipv4Cidrs, cidr)
 		case net.IPv6len:
-			ipv6CIDRs = append(ipv6CIDRs, CIDR)
+			ipv6Cidrs = append(ipv6Cidrs, cidr)
 		}
 	}
 
-	// Split IPv4 CIDRs into IPv4 subnets
+	// Split IPv4 cidrs into IPv4 subnets
 	var ipv4Subnets []*net.IPNet
-	switch len(ipv4CIDRs) {
+	switch len(ipv4Cidrs) {
 	case 1:
-		ipv4Subnets, err = cidr.SplitIntoSubnetsIPv4(ipv4CIDRs[0].String(), 2)
+		ipv4Subnets, err = cidr.SplitIntoSubnetsIPv4(ipv4Cidrs[0].String(), 2)
 		if err != nil {
 			return addressFamilySubnets, err
 		}
 	default:
-		for _, ipv4Cidr := range ipv4CIDRs {
+		for _, ipv4Cidr := range ipv4Cidrs {
 			ipv4Subnets = append(ipv4Subnets, &net.IPNet{
 				IP:   ipv4Cidr.IP,
 				Mask: ipv4Cidr.Mask,
@@ -1027,16 +1039,16 @@ func getAddressFamilySubnets(CIDRs []ipnet.IPNet) (AddressFamilySubnets, error) 
 		}
 	}
 
-	// Split IPv6 CIDRs into IPv6 subnets
+	// Split IPv6 cidrs into IPv6 subnets
 	var ipv6Subnets []*net.IPNet
-	switch len(ipv6CIDRs) {
+	switch len(ipv6Cidrs) {
 	case 1:
-		ipv6Subnets, err = cidr.SplitIntoSubnetsIPv6(ipv6CIDRs[0].String(), 2)
+		ipv6Subnets, err = cidr.SplitIntoSubnetsIPv6(ipv6Cidrs[0].String(), 2)
 		if err != nil {
 			return addressFamilySubnets, err
 		}
 	default:
-		for _, ipv6Cidr := range ipv6CIDRs {
+		for _, ipv6Cidr := range ipv6Cidrs {
 			ipv6Subnets = append(ipv6Subnets, &net.IPNet{
 				IP:   ipv6Cidr.IP,
 				Mask: ipv6Cidr.Mask,
@@ -1068,39 +1080,10 @@ func getAddressFamilySubnets(CIDRs []ipnet.IPNet) (AddressFamilySubnets, error) 
 	return addressFamilySubnets, err
 }
 
-func getIPFamilyCIDRs(CIDRs []ipnet.IPNet, ipFamilyLength int) (ipFamilyCIDRs []ipnet.IPNet) {
-	for _, CIDR := range CIDRs {
-		if len(CIDR.IP) == ipFamilyLength {
-			ipFamilyCIDRs = append(ipFamilyCIDRs, CIDR)
-		}
-	}
-	return
-}
-
-func getIPFamilySubnets(CIDRs []ipnet.IPNet, ipFamilyLength int) (ipFamilySubnets []*net.IPNet, err error) {
-	switch len(CIDRs) {
-	case 1:
-		switch ipFamilyLength {
-		case net.IPv4len:
-			ipFamilySubnets, err = cidr.SplitIntoSubnetsIPv4(CIDRs[0].String(), 2)
-		case net.IPv6len:
-			ipFamilySubnets, err = cidr.SplitIntoSubnetsIPv6(CIDRs[0].String(), 2)
-		}
-	default:
-		for _, ipFamilyCIDR := range CIDRs {
-			ipFamilySubnets = append(ipFamilySubnets, &net.IPNet{
-				IP:   ipFamilyCIDR.IP,
-				Mask: ipFamilyCIDR.Mask,
-			})
-		}
-	}
-	return
-}
-
-func getVirtualNetworkAddressPrefixes(CIDRs []ipnet.IPNet) []string {
-	var virtualNetworkAddressPrefixes []string
-	for _, CIDR := range CIDRs {
-		virtualNetworkAddressPrefixes = append(virtualNetworkAddressPrefixes, CIDR.String())
+func getVirtualNetworkAddressPrefixes(cidrs []ipnet.IPNet) []string {
+	virtualNetworkAddressPrefixes := make([]string, 0)
+	for _, cidr := range cidrs {
+		virtualNetworkAddressPrefixes = append(virtualNetworkAddressPrefixes, cidr.String())
 	}
 
 	// XXX: I don't know if this is necessary, but copying it over for now
